@@ -1,0 +1,400 @@
+@page "/purchase-orders"
+@implements IDisposable
+@using LiteDB
+@using wangpucaiben.Models
+@inject ProductService ProductService
+@inject OrderService OrderService
+@inject BarcodeScanBridgeService ScanBridgeService
+@inject ScanSessionService ScanSessionService
+@inject ScanFocusService ScanFocusService
+
+<PageTitle>采购单</PageTitle>
+
+<h1>采购单</h1>
+
+<section class="form-card">
+    <div class="panel-head">
+        <h2>@(editingOrderId == ObjectId.Empty ? "新增采购单" : "修改采购单")</h2>
+        <button type="button" class="button" @onclick="AddItem">添加商品行</button>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(errorMessage))
+    {
+        <p class="error-text">@errorMessage</p>
+    }
+
+    <div class="form-grid">
+        <label>
+            <span>供应商</span>
+            <InputText @bind-Value="supplierName" class="input" />
+        </label>
+        <label>
+            <span>备注</span>
+            <InputText @bind-Value="note" class="input" />
+        </label>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>商品</th>
+                <th>条码</th>
+                <th>数量</th>
+                <th>单价</th>
+                <th>金额</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var item in items)
+            {
+                <tr>
+                    <td>
+                        <select class="input" value="@item.ProductIdText" @onchange="e => OnProductChanged(item, e.Value?.ToString())">
+                            <option value="">请选择商品</option>
+                            @foreach (var product in products)
+                            {
+                                <option value="@product.Id.ToString()">@GetProductOptionText(product)</option>
+                            }
+                        </select>
+                    </td>
+                    <td>
+                        <InputText
+                            @bind-Value="item.Barcode"
+                            @bind-Value:after="() => OnBarcodeChanged(item)"
+                            @onfocus="() => SetFocusedItem(item)"
+                            @onblur="() => ClearFocusedItem(item)"
+                            class="input" />
+                    </td>
+                    <td>
+                        <InputNumber @bind-Value="item.Quantity" class="input" />
+                    </td>
+                    <td>
+                        <InputNumber @bind-Value="item.UnitPrice" class="input" />
+                    </td>
+                    <td>@item.Amount</td>
+                    <td>
+                        <button type="button" class="link-button danger" @onclick="() => RemoveItem(item)">删除</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <div class="form-actions">
+        <button type="button" class="button primary" @onclick="SaveOrder">
+            @(editingOrderId == ObjectId.Empty ? "保存采购单" : "保存修改")
+        </button>
+        @if (editingOrderId != ObjectId.Empty)
+        {
+            <button type="button" class="button" @onclick="ResetForm">取消编辑</button>
+        }
+        <span class="summary-text">合计：@items.Sum(x => x.Amount)</span>
+    </div>
+</section>
+
+<section class="table-card">
+    <h2>最近采购单</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>单号</th>
+                <th>时间</th>
+                <th>供应商</th>
+                <th>金额</th>
+                <th>备注</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var order in orders)
+            {
+                <tr>
+                    <td>@order.OrderNo</td>
+                    <td>@order.OccurredAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                    <td>@order.SupplierName</td>
+                    <td>@order.TotalAmount</td>
+                    <td>@order.Note</td>
+                    <td>
+                        <button type="button" class="link-button" @onclick="() => StartEdit(order.Id)">修改</button>
+                        <button type="button" class="link-button danger" @onclick="() => DeleteOrder(order.Id)">删除</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    private sealed class PurchaseOrderItemInput
+    {
+        public string ProductIdText { get; set; } = string.Empty;
+
+        public ObjectId ProductId { get; set; } = ObjectId.Empty;
+
+        public string ProductName { get; set; } = string.Empty;
+
+        public string Barcode { get; set; } = string.Empty;
+
+        public string Unit { get; set; } = "件";
+
+        public decimal Quantity { get; set; } = 1m;
+
+        public decimal UnitPrice { get; set; }
+
+        public decimal Amount => Quantity * UnitPrice;
+    }
+
+    private List<Product> products = [];
+    private List<PurchaseOrder> orders = [];
+    private List<PurchaseOrderItemInput> items = [];
+    private ObjectId editingOrderId = ObjectId.Empty;
+    private string supplierName = string.Empty;
+    private string note = string.Empty;
+    private string errorMessage = string.Empty;
+    private PurchaseOrderItemInput? focusedItem;
+    private Guid scanListenerId;
+
+    protected override void OnInitialized()
+    {
+        scanListenerId = ScanBridgeService.RegisterListener(ScanSessionService.SessionId, HandleScannedBarcodeAsync);
+        LoadData();
+        AddItem();
+    }
+
+    private void LoadData()
+    {
+        products = ProductService.GetAll();
+        orders = OrderService.GetRecentPurchaseOrders();
+    }
+
+    private void AddItem()
+    {
+        items.Add(new PurchaseOrderItemInput());
+    }
+
+    private void RemoveItem(PurchaseOrderItemInput item)
+    {
+        if (items.Count == 1)
+        {
+            return;
+        }
+
+        items.Remove(item);
+        if (ReferenceEquals(focusedItem, item))
+        {
+            focusedItem = items.FirstOrDefault();
+        }
+    }
+
+    private void OnProductChanged(PurchaseOrderItemInput item, string? productIdText)
+    {
+        item.ProductIdText = productIdText ?? string.Empty;
+        var product = products.FirstOrDefault(x => x.Id.ToString() == item.ProductIdText);
+        ApplySelectedProduct(item, product);
+    }
+
+    private void OnBarcodeChanged(PurchaseOrderItemInput item)
+    {
+        if (string.IsNullOrWhiteSpace(item.Barcode))
+        {
+            return;
+        }
+
+        var product = ProductService.GetByBarcode(item.Barcode);
+        if (product is null)
+        {
+            errorMessage = $"未找到条码为 {item.Barcode.Trim()} 的商品。";
+            return;
+        }
+
+        errorMessage = string.Empty;
+        ApplySelectedProduct(item, product);
+    }
+
+    private void SetFocusedItem(PurchaseOrderItemInput item)
+    {
+        focusedItem = item;
+        ScanFocusService.SetTarget($"采购单 / 条码输入框 / {ProductNameOrDefault(item)}");
+    }
+
+    private void ClearFocusedItem(PurchaseOrderItemInput item)
+    {
+        if (!ReferenceEquals(focusedItem, item))
+        {
+            return;
+        }
+
+        focusedItem = null;
+        ScanFocusService.ClearTarget();
+    }
+
+    private async Task HandleScannedBarcodeAsync(string barcode)
+    {
+        var targetItem = focusedItem;
+        if (targetItem is null)
+        {
+            return;
+        }
+
+        await InvokeAsync(() =>
+        {
+            targetItem.Barcode = barcode;
+            OnBarcodeChanged(targetItem);
+            StateHasChanged();
+        });
+    }
+
+    private void ApplySelectedProduct(PurchaseOrderItemInput item, Product? product)
+    {
+        if (product is null)
+        {
+            item.ProductId = ObjectId.Empty;
+            item.ProductIdText = string.Empty;
+            item.ProductName = string.Empty;
+            item.Barcode = string.Empty;
+            item.Unit = "件";
+            item.UnitPrice = 0m;
+            return;
+        }
+
+        item.ProductId = product.Id;
+        item.ProductIdText = product.Id.ToString();
+        item.ProductName = product.Name;
+        item.Barcode = product.Barcode?.Trim() ?? string.Empty;
+        item.Unit = string.IsNullOrWhiteSpace(product.Unit) ? "件" : product.Unit;
+        item.UnitPrice = product.PurchasePrice;
+    }
+
+    private Task SaveOrder()
+    {
+        errorMessage = string.Empty;
+
+        var validItems = items
+            .Where(x => x.ProductId != ObjectId.Empty && x.Quantity > 0)
+            .Select(x => new PurchaseOrderItem
+            {
+                ProductId = x.ProductId,
+                ProductName = x.ProductName,
+                Unit = x.Unit,
+                Quantity = x.Quantity,
+                UnitPrice = x.UnitPrice
+            })
+            .ToList();
+
+        if (validItems.Count == 0)
+        {
+            errorMessage = "请至少选择一行商品。";
+            return Task.CompletedTask;
+        }
+
+        var order = new PurchaseOrder
+        {
+            SupplierName = supplierName,
+            Note = note,
+            Items = validItems,
+            OccurredAt = DateTimeOffset.Now
+        };
+
+        if (editingOrderId == ObjectId.Empty)
+        {
+            OrderService.CreatePurchaseOrder(order);
+        }
+        else
+        {
+            order.Id = editingOrderId;
+            OrderService.UpdatePurchaseOrder(order);
+        }
+
+        ResetForm();
+        LoadData();
+        return Task.CompletedTask;
+    }
+
+    private Task StartEdit(ObjectId id)
+    {
+        errorMessage = string.Empty;
+        var order = OrderService.GetPurchaseOrderById(id);
+        if (order is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        editingOrderId = order.Id;
+        supplierName = order.SupplierName;
+        note = order.Note;
+        items = order.Items.Select(item =>
+        {
+            var product = products.FirstOrDefault(x => x.Id == item.ProductId);
+            return new PurchaseOrderItemInput
+            {
+                ProductIdText = item.ProductId.ToString(),
+                ProductId = item.ProductId,
+                ProductName = item.ProductName,
+                Barcode = product?.Barcode?.Trim() ?? string.Empty,
+                Unit = string.IsNullOrWhiteSpace(item.Unit) ? product?.Unit ?? "件" : item.Unit,
+                Quantity = item.Quantity,
+                UnitPrice = item.UnitPrice
+            };
+        }).ToList();
+
+        if (items.Count == 0)
+        {
+            AddItem();
+        }
+
+        focusedItem = null;
+        ScanFocusService.ClearTarget();
+        return Task.CompletedTask;
+    }
+
+    private Task DeleteOrder(ObjectId id)
+    {
+        errorMessage = string.Empty;
+        OrderService.DeletePurchaseOrder(id);
+        if (editingOrderId == id)
+        {
+            ResetForm();
+        }
+
+        LoadData();
+        return Task.CompletedTask;
+    }
+
+    private void ResetForm()
+    {
+        editingOrderId = ObjectId.Empty;
+        supplierName = string.Empty;
+        note = string.Empty;
+        errorMessage = string.Empty;
+        items = [];
+        AddItem();
+        focusedItem = null;
+        ScanFocusService.ClearTarget();
+    }
+
+    private static string GetProductOptionText(Product product)
+    {
+        return string.IsNullOrWhiteSpace(product.Barcode)
+            ? product.Name
+            : $"{product.Name} [{product.Barcode.Trim()}]";
+    }
+
+    private static string ProductNameOrDefault(PurchaseOrderItemInput item)
+    {
+        return string.IsNullOrWhiteSpace(item.ProductName) ? "未选商品" : item.ProductName;
+    }
+
+    public void Dispose()
+    {
+        if (focusedItem is not null)
+        {
+            ScanFocusService.ClearTarget();
+        }
+
+        if (scanListenerId != Guid.Empty)
+        {
+            ScanBridgeService.RemoveListener(ScanSessionService.SessionId, scanListenerId);
+        }
+    }
+}

@@ -1,0 +1,103 @@
+@page "/cashflows"
+@using wangpucaiben.Models
+@inject TransactionService TransactionService
+
+<PageTitle>收支记录</PageTitle>
+
+<h1>收支记录</h1>
+
+<section class="form-card">
+    <h2>新增收支</h2>
+    <EditForm Model="input" OnValidSubmit="SaveTransaction">
+        <DataAnnotationsValidator />
+        <div class="form-grid">
+            <label>
+                <span>类型</span>
+                <select class="input" @bind="input.TransactionType">
+                    @foreach (var item in Enum.GetValues<CashTransactionType>())
+                    {
+                        <option value="@item">@GetTransactionTypeText(item)</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>金额</span>
+                <InputNumber @bind-Value="input.Amount" class="input" />
+            </label>
+            <label>
+                <span>分类</span>
+                <InputText @bind-Value="input.Category" class="input" />
+            </label>
+            <label class="span-2">
+                <span>备注</span>
+                <InputText @bind-Value="input.Note" class="input" />
+            </label>
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="button primary">保存</button>
+        </div>
+    </EditForm>
+</section>
+
+<section class="table-card">
+    <h2>最近记录</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>时间</th>
+                <th>类型</th>
+                <th>金额</th>
+                <th>分类</th>
+                <th>备注</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var transaction in transactions)
+            {
+                <tr>
+                    <td>@transaction.OccurredAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                    <td>@GetTransactionTypeText(transaction.TransactionType)</td>
+                    <td>@transaction.Amount</td>
+                    <td>@transaction.Category</td>
+                    <td>@transaction.Note</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    private List<CashTransaction> transactions = [];
+    private CashTransaction input = new()
+    {
+        TransactionType = CashTransactionType.Income,
+        Category = "营业收入"
+    };
+
+    protected override void OnInitialized()
+    {
+        transactions = TransactionService.GetRecent();
+    }
+
+    private static string GetTransactionTypeText(CashTransactionType type)
+    {
+        return type switch
+        {
+            CashTransactionType.Income => "收入",
+            CashTransactionType.Expense => "支出",
+            _ => type.ToString()
+        };
+    }
+
+    private Task SaveTransaction()
+    {
+        TransactionService.Upsert(input);
+        transactions = TransactionService.GetRecent();
+        input = new CashTransaction
+        {
+            TransactionType = CashTransactionType.Income,
+            Category = "营业收入"
+        };
+        return Task.CompletedTask;
+    }
+}

@@ -1,0 +1,426 @@
+@page "/"
+@using System.Globalization
+@inject TransactionService TransactionService
+@inject OrderService OrderService
+
+<PageTitle>总览</PageTitle>
+
+<section class="hero">
+    <div>
+        <p class="eyebrow">经营概览</p>
+        <h1>先看收入，再看利润和热卖商品。</h1>
+        <p class="lead">首页集中展示收入、纯利润、每日走势、销量排行和利润排行，方便你快速看清经营变化。</p>
+    </div>
+</section>
+
+<section class="cards cards-six">
+    <article class="card metric">
+        <span>当天收入</span>
+        <strong>@FormatCurrency(todayIncome)</strong>
+    </article>
+    <article class="card metric">
+        <span>7 天收入</span>
+        <strong>@FormatCurrency(sevenDayIncome)</strong>
+    </article>
+    <article class="card metric">
+        <span>30 天收入</span>
+        <strong>@FormatCurrency(thirtyDayIncome)</strong>
+    </article>
+    <article class="card metric">
+        <span>当天纯利润</span>
+        <strong>@FormatCurrency(todayProfit)</strong>
+    </article>
+    <article class="card metric">
+        <span>7 天纯利润</span>
+        <strong>@FormatCurrency(sevenDayProfit)</strong>
+    </article>
+    <article class="card metric">
+        <span>30 天纯利润</span>
+        <strong>@FormatCurrency(thirtyDayProfit)</strong>
+    </article>
+</section>
+
+<section class="panel-grid">
+    <section class="panel sales-chart-panel">
+        <div class="panel-head">
+            <div>
+                <h2>每日销售额</h2>
+                <span>最近 30 天销售额折线图</span>
+            </div>
+            <strong class="chart-summary">峰值 @FormatCurrency(salesChart.MaxAmount)</strong>
+        </div>
+
+        @if (!salesChart.HasData)
+        {
+            <p class="empty-state">最近 30 天暂无销售数据。</p>
+        }
+        else
+        {
+            <div class="sales-chart">
+                <svg viewBox="0 0 720 260" class="sales-chart-svg" role="img" aria-label="最近30天每日销售额折线图">
+                    <polyline class="chart-grid-line" points="48,24 48,220 688,220" />
+                    @foreach (var guide in salesChart.Guides)
+                    {
+                        <line class="chart-guide" x1="48" y1="@FormatNumber(guide.Y)" x2="688" y2="@FormatNumber(guide.Y)"></line>
+                        <svg:text class="chart-axis-label" x="8" y="@FormatNumber(guide.Y + 4m)">@guide.AmountText</svg:text>
+                    }
+                    <polygon class="chart-area" points="@salesChart.AreaPoints" />
+                    <polyline class="chart-line" points="@salesChart.LinePoints" />
+                    @foreach (var point in salesChart.Dots)
+                    {
+                        <circle class="chart-dot" cx="@FormatNumber(point.X)" cy="@FormatNumber(point.Y)" r="4">
+                            <title>@point.Label</title>
+                        </circle>
+                    }
+                    @foreach (var label in salesChart.DateLabels)
+                    {
+                        <svg:text class="chart-axis-label" x="@FormatNumber(label.X)" y="246" text-anchor="@label.Anchor">@label.Text</svg:text>
+                    }
+                </svg>
+            </div>
+        }
+    </section>
+
+    <section class="panel sales-chart-panel">
+        <div class="panel-head">
+            <div>
+                <h2>每日纯利润</h2>
+                <span>最近 30 天纯利润折线图</span>
+            </div>
+            <strong class="chart-summary">峰值 @FormatCurrency(profitChart.MaxAmount)</strong>
+        </div>
+
+        @if (!profitChart.HasData)
+        {
+            <p class="empty-state">最近 30 天暂无利润数据。</p>
+        }
+        else
+        {
+            <div class="sales-chart">
+                <svg viewBox="0 0 720 260" class="sales-chart-svg" role="img" aria-label="最近30天每日纯利润折线图">
+                    <polyline class="chart-grid-line" points="48,24 48,220 688,220" />
+                    @foreach (var guide in profitChart.Guides)
+                    {
+                        <line class="chart-guide" x1="48" y1="@FormatNumber(guide.Y)" x2="688" y2="@FormatNumber(guide.Y)"></line>
+                        <svg:text class="chart-axis-label" x="8" y="@FormatNumber(guide.Y + 4m)">@guide.AmountText</svg:text>
+                    }
+                    <polygon class="chart-area profit-chart-area" points="@profitChart.AreaPoints" />
+                    <polyline class="chart-line profit-chart-line" points="@profitChart.LinePoints" />
+                    @foreach (var point in profitChart.Dots)
+                    {
+                        <circle class="chart-dot profit-chart-dot" cx="@FormatNumber(point.X)" cy="@FormatNumber(point.Y)" r="4">
+                            <title>@point.Label</title>
+                        </circle>
+                    }
+                    @foreach (var label in profitChart.DateLabels)
+                    {
+                        <svg:text class="chart-axis-label" x="@FormatNumber(label.X)" y="246" text-anchor="@label.Anchor">@label.Text</svg:text>
+                    }
+                </svg>
+            </div>
+        }
+    </section>
+</section>
+
+<section class="panel-grid">
+    <article class="panel">
+        <div class="panel-head">
+            <div>
+                <h2>近 7 天商品销量排行</h2>
+                <span>按售出数量排序</span>
+            </div>
+        </div>
+
+        @if (sevenDayTopProducts.Count == 0)
+        {
+            <p class="empty-state">近 7 天暂无销售数据。</p>
+        }
+        else
+        {
+            <ol class="ranking-list">
+                @foreach (var item in sevenDayTopProducts.Select((value, index) => new { value, index }))
+                {
+                    <li class="ranking-item">
+                        <div class="ranking-meta">
+                            <span class="rank-badge">#@(item.index + 1)</span>
+                            <strong>@item.value.ProductName</strong>
+                        </div>
+                        <span class="ranking-value">@item.value.Quantity @item.value.Unit</span>
+                    </li>
+                }
+            </ol>
+        }
+    </article>
+
+    <article class="panel">
+        <div class="panel-head">
+            <div>
+                <h2>近 30 天商品销量排行</h2>
+                <span>按售出数量排序</span>
+            </div>
+        </div>
+
+        @if (thirtyDayTopProducts.Count == 0)
+        {
+            <p class="empty-state">近 30 天暂无销售数据。</p>
+        }
+        else
+        {
+            <ol class="ranking-list">
+                @foreach (var item in thirtyDayTopProducts.Select((value, index) => new { value, index }))
+                {
+                    <li class="ranking-item">
+                        <div class="ranking-meta">
+                            <span class="rank-badge">#@(item.index + 1)</span>
+                            <strong>@item.value.ProductName</strong>
+                        </div>
+                        <span class="ranking-value">@item.value.Quantity @item.value.Unit</span>
+                    </li>
+                }
+            </ol>
+        }
+    </article>
+</section>
+
+<section class="panel-grid">
+    <article class="panel">
+        <div class="panel-head">
+            <div>
+                <h2>近 7 天商品利润排行</h2>
+                <span>按纯利润排序</span>
+            </div>
+        </div>
+
+        @if (sevenDayTopProfitProducts.Count == 0)
+        {
+            <p class="empty-state">近 7 天暂无利润数据。</p>
+        }
+        else
+        {
+            <ol class="ranking-list">
+                @foreach (var item in sevenDayTopProfitProducts.Select((value, index) => new { value, index }))
+                {
+                    <li class="ranking-item">
+                        <div class="ranking-meta">
+                            <span class="rank-badge">#@(item.index + 1)</span>
+                            <strong>@item.value.ProductName</strong>
+                        </div>
+                        <span class="ranking-value">@FormatCurrency(item.value.ProfitAmount)</span>
+                    </li>
+                }
+            </ol>
+        }
+    </article>
+
+    <article class="panel">
+        <div class="panel-head">
+            <div>
+                <h2>近 30 天商品利润排行</h2>
+                <span>按纯利润排序</span>
+            </div>
+        </div>
+
+        @if (thirtyDayTopProfitProducts.Count == 0)
+        {
+            <p class="empty-state">近 30 天暂无利润数据。</p>
+        }
+        else
+        {
+            <ol class="ranking-list">
+                @foreach (var item in thirtyDayTopProfitProducts.Select((value, index) => new { value, index }))
+                {
+                    <li class="ranking-item">
+                        <div class="ranking-meta">
+                            <span class="rank-badge">#@(item.index + 1)</span>
+                            <strong>@item.value.ProductName</strong>
+                        </div>
+                        <span class="ranking-value">@FormatCurrency(item.value.ProfitAmount)</span>
+                    </li>
+                }
+            </ol>
+        }
+    </article>
+</section>
+
+@code {
+    private decimal todayIncome;
+    private decimal sevenDayIncome;
+    private decimal thirtyDayIncome;
+    private decimal todayProfit;
+    private decimal sevenDayProfit;
+    private decimal thirtyDayProfit;
+    private List<ProductSalesRanking> sevenDayTopProducts = [];
+    private List<ProductSalesRanking> thirtyDayTopProducts = [];
+    private List<ProductSalesRanking> sevenDayTopProfitProducts = [];
+    private List<ProductSalesRanking> thirtyDayTopProfitProducts = [];
+    private ChartModel salesChart = ChartModel.Empty;
+    private ChartModel profitChart = ChartModel.Empty;
+
+    protected override void OnInitialized()
+    {
+        var now = DateTimeOffset.Now;
+        var todayStart = new DateTimeOffset(now.Year, now.Month, now.Day, 0, 0, 0, now.Offset);
+        var tomorrowStart = todayStart.AddDays(1);
+        var sevenDayStart = todayStart.AddDays(-6);
+        var thirtyDayStart = todayStart.AddDays(-29);
+
+        todayIncome = TransactionService.GetIncomeTotal(todayStart, tomorrowStart);
+        sevenDayIncome = TransactionService.GetIncomeTotal(sevenDayStart, tomorrowStart);
+        thirtyDayIncome = TransactionService.GetIncomeTotal(thirtyDayStart, tomorrowStart);
+        todayProfit = OrderService.GetProfitTotal(todayStart, tomorrowStart);
+        sevenDayProfit = OrderService.GetProfitTotal(sevenDayStart, tomorrowStart);
+        thirtyDayProfit = OrderService.GetProfitTotal(thirtyDayStart, tomorrowStart);
+        sevenDayTopProducts = OrderService.GetTopSellingProducts(sevenDayStart, tomorrowStart);
+        thirtyDayTopProducts = OrderService.GetTopSellingProducts(thirtyDayStart, tomorrowStart);
+        sevenDayTopProfitProducts = OrderService.GetTopProfitProducts(sevenDayStart, tomorrowStart);
+        thirtyDayTopProfitProducts = OrderService.GetTopProfitProducts(thirtyDayStart, tomorrowStart);
+        salesChart = BuildChart(TransactionService.GetDailyIncomeSeries(thirtyDayStart, tomorrowStart), "销售额");
+        profitChart = BuildChart(OrderService.GetDailyProfitSeries(thirtyDayStart, tomorrowStart), "纯利润");
+    }
+
+    private static ChartModel BuildChart(List<DailySalesPoint> points, string metricName)
+    {
+        if (points.Count == 0 || !points.Any(x => x.Amount > 0))
+        {
+            return ChartModel.Empty;
+        }
+
+        const decimal left = 48m;
+        const decimal top = 24m;
+        const decimal width = 640m;
+        const decimal height = 196m;
+        var maxAmount = points.Max(x => x.Amount);
+        var scaleMax = maxAmount <= 0 ? 1m : maxAmount;
+        var xStep = points.Count > 1 ? width / (points.Count - 1) : 0m;
+        var baselineY = top + height;
+        var linePointList = new List<string>();
+        var dots = new List<ChartDot>();
+
+        for (var i = 0; i < points.Count; i++)
+        {
+            var point = points[i];
+            var x = left + (xStep * i);
+            var y = baselineY - ((point.Amount / scaleMax) * height);
+            linePointList.Add($"{FormatNumber(x)},{FormatNumber(y)}");
+
+            if (point.Amount > 0)
+            {
+                dots.Add(new ChartDot
+                {
+                    X = x,
+                    Y = y,
+                    Label = $"{point.Date:MM-dd} {metricName} {FormatCurrency(point.Amount)}"
+                });
+            }
+        }
+
+        var linePoints = string.Join(" ", linePointList);
+        var labelIndexes = BuildDateLabelIndexes(points.Count);
+
+        return new ChartModel
+        {
+            HasData = true,
+            MaxAmount = maxAmount,
+            LinePoints = linePoints,
+            AreaPoints = $"{FormatNumber(left)},{FormatNumber(baselineY)} {linePoints} {FormatNumber(left + width)},{FormatNumber(baselineY)}",
+            Dots = dots,
+            Guides =
+            [
+                CreateGuide(baselineY, 0m),
+                CreateGuide(top + (height * 2m / 3m), scaleMax / 3m),
+                CreateGuide(top + (height / 3m), scaleMax * 2m / 3m),
+                CreateGuide(top, scaleMax)
+            ],
+            DateLabels = labelIndexes
+                .Select(index => new ChartDateLabel
+                {
+                    X = left + (xStep * index),
+                    Text = points[index].Date.ToString("MM-dd"),
+                    Anchor = index == 0 ? "start" : index == points.Count - 1 ? "end" : "middle"
+                })
+                .ToList()
+        };
+    }
+
+    private static ChartGuide CreateGuide(decimal y, decimal amount)
+    {
+        return new ChartGuide
+        {
+            Y = y,
+            AmountText = FormatCurrency(amount)
+        };
+    }
+
+    private static string FormatNumber(decimal value)
+    {
+        return value.ToString("0.##", CultureInfo.InvariantCulture);
+    }
+
+    private static string FormatCurrency(decimal value)
+    {
+        return $"¥{value.ToString("0.##", CultureInfo.InvariantCulture)}";
+    }
+
+    private static List<int> BuildDateLabelIndexes(int count)
+    {
+        if (count <= 1)
+        {
+            return [0];
+        }
+
+        var indexes = new HashSet<int> { 0, count - 1 };
+        var segments = Math.Min(4, count - 1);
+
+        for (var i = 1; i < segments; i++)
+        {
+            var index = (int)Math.Round((count - 1d) * i / segments, MidpointRounding.AwayFromZero);
+            indexes.Add(index);
+        }
+
+        return indexes.OrderBy(x => x).ToList();
+    }
+
+    private sealed class ChartModel
+    {
+        public static readonly ChartModel Empty = new();
+
+        public bool HasData { get; set; }
+
+        public decimal MaxAmount { get; set; }
+
+        public string LinePoints { get; set; } = string.Empty;
+
+        public string AreaPoints { get; set; } = string.Empty;
+
+        public List<ChartDot> Dots { get; set; } = [];
+
+        public List<ChartGuide> Guides { get; set; } = [];
+
+        public List<ChartDateLabel> DateLabels { get; set; } = [];
+    }
+
+    private sealed class ChartDot
+    {
+        public decimal X { get; set; }
+
+        public decimal Y { get; set; }
+
+        public string Label { get; set; } = string.Empty;
+    }
+
+    private sealed class ChartGuide
+    {
+        public decimal Y { get; set; }
+
+        public string AmountText { get; set; } = string.Empty;
+    }
+
+    private sealed class ChartDateLabel
+    {
+        public decimal X { get; set; }
+
+        public string Text { get; set; } = string.Empty;
+
+        public string Anchor { get; set; } = "middle";
+    }
+}

@@ -1,0 +1,132 @@
+@page "/scanner"
+@implements IAsyncDisposable
+@inject BarcodeScanBridgeService ScanBridgeService
+@inject IJSRuntime JSRuntime
+@rendermode InteractiveServer
+
+<PageTitle>手机扫码</PageTitle>
+
+<h1>手机扫码</h1>
+
+<section class="form-card">
+    <div class="form-grid">
+        <label>
+            <span>会话码</span>
+            <InputText @bind-Value="sessionId" class="input" />
+        </label>
+    </div>
+
+    <div class="form-actions">
+        <button type="button" class="button primary" @onclick="StartScanner">打开相机扫码</button>
+        <button type="button" class="button" @onclick="StopScanner">停止扫码</button>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <p class="summary-text">@message</p>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(errorMessage))
+    {
+        <p class="error-text">@errorMessage</p>
+    }
+
+    <div class="scanner-preview">
+        <video id="@videoElementId" class="scanner-video" playsinline autoplay muted></video>
+    </div>
+
+    <p class="muted-text">这是通用扫码页。电脑端哪个页面当前在监听并且输入框有焦点，扫码结果就会回填到哪里。</p>
+</section>
+
+@code {
+    [SupplyParameterFromQuery]
+    private string? SessionId { get; set; }
+
+    private string sessionId = string.Empty;
+    private string message = string.Empty;
+    private string errorMessage = string.Empty;
+    private bool scannerStarted;
+    private readonly string videoElementId = $"scanner-video-{Guid.NewGuid():N}";
+    private DotNetObjectReference<Scanner>? dotNetRef;
+    private bool autoStartPending;
+
+    protected override Task OnParametersSetAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(SessionId))
+        {
+            sessionId = SessionId.Trim();
+            autoStartPending = true;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (autoStartPending && !scannerStarted && !string.IsNullOrWhiteSpace(sessionId))
+        {
+            autoStartPending = false;
+            await StartScanner();
+        }
+    }
+
+    private async Task StartScanner()
+    {
+        errorMessage = string.Empty;
+        message = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            errorMessage = "请先输入会话码。";
+            return;
+        }
+
+        dotNetRef ??= DotNetObjectReference.Create(this);
+
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("barcodeScanner.start", videoElementId, dotNetRef);
+            scannerStarted = true;
+            message = "相机已打开，可连续扫码。";
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+    }
+
+    private async Task StopScanner()
+    {
+        if (!scannerStarted)
+        {
+            return;
+        }
+
+        await JSRuntime.InvokeVoidAsync("barcodeScanner.stop");
+        scannerStarted = false;
+        message = "扫码已停止。";
+    }
+
+    [JSInvokable]
+    public async Task OnBarcodeDetected(string barcode)
+    {
+        errorMessage = string.Empty;
+
+        var published = await ScanBridgeService.PublishAsync(sessionId, barcode);
+        message = published
+            ? $"已发送：{barcode}"
+            : $"已识别 {barcode}，但当前没有电脑端会话在监听。";
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (scannerStarted)
+        {
+            await JSRuntime.InvokeVoidAsync("barcodeScanner.stop");
+        }
+
+        dotNetRef?.Dispose();
+    }
+}

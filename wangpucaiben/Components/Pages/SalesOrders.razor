@@ -1,0 +1,872 @@
+@page "/sales-orders"
+@implements IDisposable
+@using LiteDB
+@using wangpucaiben.Models
+@inject ProductService ProductService
+@inject OrderService OrderService
+@inject BarcodeScanBridgeService ScanBridgeService
+@inject ScanSessionService ScanSessionService
+@inject ScanFocusService ScanFocusService
+@inject IJSRuntime JSRuntime
+
+<PageTitle>销售单</PageTitle>
+
+<h1>销售单</h1>
+
+<section class="form-card">
+    <div class="panel-head">
+        <h2>@GetFormTitle()</h2>
+        <button type="button" class="button" @onclick="AddItem">添加商品行</button>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(errorMessage))
+    {
+        <p class="error-text">@errorMessage</p>
+    }
+
+    <div class="form-grid">
+        <label>
+            <span>客户</span>
+            <InputText @bind-Value="customerName" class="input" />
+        </label>
+        <label>
+            <span>销售时间</span>
+            <input type="datetime-local" value="@occurredAtText" @onchange="OnOccurredAtChanged" class="input" />
+        </label>
+        <label>
+            <span>备注</span>
+            <InputText @bind-Value="note" class="input" />
+        </label>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>商品</th>
+                <th>条码</th>
+                <th>当前库存</th>
+                <th>数量</th>
+                <th>计价方式</th>
+                <th>售价</th>
+                <th>总价</th>
+                <th>成本价</th>
+                <th>金额</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var item in items)
+            {
+                <tr>
+                    <td>
+                        <select class="input" value="@item.ProductIdText" @onchange="e => OnProductChanged(item, e.Value?.ToString())">
+                            <option value="">请选择商品</option>
+                            @foreach (var product in products)
+                            {
+                                <option value="@product.Id.ToString()">@GetProductOptionText(product)</option>
+                            }
+                        </select>
+                    </td>
+                    <td>
+                        <InputText
+                            @bind-Value="item.Barcode"
+                            @bind-Value:after="() => OnBarcodeChanged(item)"
+                            @onfocus="() => SetFocusedItem(item)"
+                            @onblur="() => ClearFocusedItem(item)"
+                            class="input" />
+                    </td>
+                    <td>@item.StockQuantity @item.Unit</td>
+                    <td>
+                        <InputNumber @bind-Value="item.Quantity" class="input" />
+                    </td>
+                    <td>
+                        <select class="input" value="@item.PricingMode" @onchange="e => OnPricingModeChanged(item, e.Value?.ToString())">
+                            <option value="@SalesOrderPricingMode.UnitPrice">按单价</option>
+                            <option value="@SalesOrderPricingMode.BulkTotal">按总价(批量)</option>
+                        </select>
+                    </td>
+                    <td>
+                        @if (item.PricingMode == SalesOrderPricingMode.UnitPrice)
+                        {
+                            <InputNumber @bind-Value="item.UnitPrice" class="input" />
+                        }
+                        else
+                        {
+                            <span class="muted-text">@GetDerivedUnitPriceText(item)</span>
+                        }
+                    </td>
+                    <td>
+                        @if (item.PricingMode == SalesOrderPricingMode.BulkTotal)
+                        {
+                            <InputNumber @bind-Value="item.LineTotalAmount" class="input" />
+                        }
+                        else
+                        {
+                            <span>@item.Amount</span>
+                        }
+                    </td>
+                    <td>@item.CostPrice</td>
+                    <td>@item.Amount</td>
+                    <td>
+                        <button type="button" class="link-button danger" @onclick="() => RemoveItem(item)">删除</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <div class="form-actions">
+        <button type="button" class="button primary" @onclick="SaveOrder">@GetSubmitButtonText()</button>
+        @if (editingOrderId != ObjectId.Empty)
+        {
+            <button type="button" class="button" @onclick="ResetForm">取消编辑</button>
+        }
+        <span class="summary-text">合计：@items.Sum(x => x.Amount)</span>
+    </div>
+</section>
+
+<section class="table-card">
+    <div class="panel-head">
+        <h2>销售记录</h2>
+        <div class="filter-row">
+            <label class="date-filter">
+                <span>开始日期</span>
+                <InputDate @bind-Value="startDate" @bind-Value:after="ApplyFilter" class="input" />
+            </label>
+            <label class="date-filter">
+                <span>结束日期</span>
+                <InputDate @bind-Value="endDate" @bind-Value:after="ApplyFilter" class="input" />
+            </label>
+            <label class="date-filter">
+                <span>排序</span>
+                <select class="input" value="@sortMode" @onchange="OnSortModeChanged">
+                    <option value="@SalesOrderSortMode.TimeDesc">时间倒序</option>
+                    <option value="@SalesOrderSortMode.ProfitDesc">利润倒序</option>
+                    <option value="@SalesOrderSortMode.ProfitAsc">利润正序</option>
+                </select>
+            </label>
+        </div>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>单号</th>
+                <th>时间</th>
+                <th>客户</th>
+                <th>销售额</th>
+                <th>成本</th>
+                <th>纯利润</th>
+                <th>备注</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var order in pagedOrders)
+            {
+                <tr class="@(selectedOrder?.Id == order.Id ? "is-active-row" : string.Empty)">
+                    <td>@order.OrderNo</td>
+                    <td>@order.OccurredAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                    <td>@order.CustomerName</td>
+                    <td>@order.TotalAmount</td>
+                    <td>@order.TotalCost</td>
+                    <td>@order.ProfitAmount</td>
+                    <td>@order.Note</td>
+                    <td>
+                        <button type="button" class="link-button" @onclick="() => PreviewOrder(order.Id)">查看</button>
+                        <button type="button" class="link-button" @onclick="() => StartEdit(order.Id)">修改</button>
+                        <button type="button" class="link-button danger" @onclick="() => DeleteOrder(order.Id)">删除</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    @if (totalPages > 1)
+    {
+        <div class="pagination">
+            <div class="pagination-settings">
+                <span class="pagination-text">每页</span>
+                <select class="input pagination-size" value="@pageSize" @onchange="OnPageSizeChanged">
+                    @foreach (var size in pageSizeOptions)
+                    {
+                        <option value="@size">@size</option>
+                    }
+                </select>
+                <span class="pagination-text">条</span>
+            </div>
+            <button type="button" class="button" @onclick="FirstPage" disabled="@(currentPage == 1)">首页</button>
+            <button type="button" class="button" @onclick="PreviousPage" disabled="@(currentPage == 1)">上一页</button>
+            <div class="pagination-pages">
+                @foreach (var item in paginationItems)
+                {
+                    @if (item.IsEllipsis)
+                    {
+                        <span class="pagination-ellipsis">...</span>
+                    }
+                    else
+                    {
+                        <button
+                            type="button"
+                            class="button @(item.IsCurrent ? "is-active-page" : string.Empty)"
+                            @onclick="() => GoToPage(item.PageNumber)">
+                            @item.Text
+                        </button>
+                    }
+                }
+            </div>
+            <span class="pagination-text">第 @currentPage / @totalPages 页，共 @filteredOrders.Count 条</span>
+            <button type="button" class="button" @onclick="NextPage" disabled="@(currentPage == totalPages)">下一页</button>
+            <button type="button" class="button" @onclick="LastPage" disabled="@(currentPage == totalPages)">末页</button>
+        </div>
+    }
+</section>
+
+@if (selectedOrder is not null)
+{
+    <section class="panel receipt-card" id="receipt-preview">
+        <div class="panel-head">
+            <h2>小票预览</h2>
+            <button type="button" class="button" @onclick="PrintReceipt">打印</button>
+        </div>
+
+        <div class="receipt-body">
+            <h3>杂货店销售小票</h3>
+            <p>单号：@selectedOrder.OrderNo</p>
+            <p>时间：@selectedOrder.OccurredAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</p>
+            <p>客户：@selectedOrder.CustomerName</p>
+            <table class="receipt-table">
+                <thead>
+                    <tr>
+                        <th>商品</th>
+                        <th>数量</th>
+                        <th>计价</th>
+                        <th>成本</th>
+                        <th>金额</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in selectedOrder.Items)
+                    {
+                        <tr>
+                            <td>@item.ProductName</td>
+                            <td>@item.Quantity @item.Unit</td>
+                            <td>@GetReceiptPricingText(item)</td>
+                            <td>@item.CostAmount</td>
+                            <td>@item.Amount</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <p>备注：@selectedOrder.Note</p>
+            <p>成本：@selectedOrder.TotalCost</p>
+            <p>纯利润：@selectedOrder.ProfitAmount</p>
+            <p class="receipt-total">合计：@selectedOrder.TotalAmount</p>
+        </div>
+    </section>
+}
+
+@code {
+    private sealed class SalesOrderItemInput
+    {
+        public string ProductIdText { get; set; } = string.Empty;
+
+        public ObjectId ProductId { get; set; } = ObjectId.Empty;
+
+        public string ProductName { get; set; } = string.Empty;
+
+        public string Barcode { get; set; } = string.Empty;
+
+        public string Unit { get; set; } = "件";
+
+        public decimal StockQuantity { get; set; }
+
+        public decimal Quantity { get; set; } = 1m;
+
+        public decimal UnitPrice { get; set; }
+
+        public SalesOrderPricingMode PricingMode { get; set; } = SalesOrderPricingMode.UnitPrice;
+
+        public decimal LineTotalAmount { get; set; }
+
+        public decimal CostPrice { get; set; }
+
+        public decimal Amount => PricingMode == SalesOrderPricingMode.BulkTotal
+            ? LineTotalAmount
+            : Quantity * UnitPrice;
+    }
+
+    private sealed class PaginationItem
+    {
+        public string Text { get; set; } = string.Empty;
+
+        public int? PageNumber { get; set; }
+
+        public bool IsCurrent { get; set; }
+
+        public bool IsEllipsis { get; set; }
+    }
+
+    private enum SalesOrderSortMode
+    {
+        TimeDesc,
+        ProfitDesc,
+        ProfitAsc
+    }
+
+    private List<Product> products = [];
+    private List<SalesOrder> filteredOrders = [];
+    private List<SalesOrder> pagedOrders = [];
+    private List<SalesOrderItemInput> items = [];
+    private SalesOrder? selectedOrder;
+    private ObjectId editingOrderId = ObjectId.Empty;
+    private string customerName = string.Empty;
+    private string occurredAtText = FormatDateTimeLocal(DateTimeOffset.Now);
+    private string note = string.Empty;
+    private string errorMessage = string.Empty;
+    private DateTime startDate = DateTime.Today;
+    private DateTime endDate = DateTime.Today;
+    private SalesOrderSortMode sortMode = SalesOrderSortMode.TimeDesc;
+    private int currentPage = 1;
+    private int pageSize = 10;
+    private SalesOrderItemInput? focusedItem;
+    private Guid scanListenerId;
+    private readonly int[] pageSizeOptions = [10, 20, 50];
+
+    private int totalPages => Math.Max(1, (int)Math.Ceiling(filteredOrders.Count / (double)pageSize));
+    private List<PaginationItem> paginationItems => BuildPaginationItems();
+
+    protected override void OnInitialized()
+    {
+        scanListenerId = ScanBridgeService.RegisterListener(ScanSessionService.SessionId, HandleScannedBarcodeAsync);
+        LoadData();
+        AddItem();
+    }
+
+    private void LoadData()
+    {
+        products = ProductService.GetAll();
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        var actualStartDate = startDate <= endDate ? startDate : endDate;
+        var actualEndDate = startDate <= endDate ? endDate : startDate;
+        var start = new DateTimeOffset(actualStartDate.Date, DateTimeOffset.Now.Offset);
+        var end = new DateTimeOffset(actualEndDate.Date, DateTimeOffset.Now.Offset).AddDays(1);
+
+        filteredOrders = SortOrders(OrderService.GetSalesOrdersByDateRange(start, end));
+        currentPage = Math.Min(currentPage, totalPages);
+        currentPage = Math.Max(currentPage, 1);
+        ApplyPagination();
+
+        if (selectedOrder is not null)
+        {
+            selectedOrder = filteredOrders.FirstOrDefault(x => x.Id == selectedOrder.Id);
+        }
+    }
+
+    private void ApplyPagination()
+    {
+        pagedOrders = filteredOrders
+            .Skip((currentPage - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+    }
+
+    private void OnPageSizeChanged(ChangeEventArgs args)
+    {
+        if (!int.TryParse(args.Value?.ToString(), out var newPageSize) || newPageSize <= 0 || newPageSize == pageSize)
+        {
+            return;
+        }
+
+        pageSize = newPageSize;
+        currentPage = 1;
+        ApplyPagination();
+    }
+
+    private void OnSortModeChanged(ChangeEventArgs args)
+    {
+        if (!Enum.TryParse<SalesOrderSortMode>(args.Value?.ToString(), out var newSortMode))
+        {
+            return;
+        }
+
+        sortMode = newSortMode;
+        currentPage = 1;
+        ApplyFilter();
+    }
+
+    private void OnOccurredAtChanged(ChangeEventArgs args)
+    {
+        occurredAtText = args.Value?.ToString() ?? string.Empty;
+    }
+
+    private void FirstPage()
+    {
+        if (currentPage == 1)
+        {
+            return;
+        }
+
+        currentPage = 1;
+        ApplyPagination();
+    }
+
+    private void PreviousPage()
+    {
+        if (currentPage <= 1)
+        {
+            return;
+        }
+
+        currentPage--;
+        ApplyPagination();
+    }
+
+    private void NextPage()
+    {
+        if (currentPage >= totalPages)
+        {
+            return;
+        }
+
+        currentPage++;
+        ApplyPagination();
+    }
+
+    private void LastPage()
+    {
+        if (currentPage == totalPages)
+        {
+            return;
+        }
+
+        currentPage = totalPages;
+        ApplyPagination();
+    }
+
+    private void GoToPage(int? pageNumber)
+    {
+        if (!pageNumber.HasValue || pageNumber < 1 || pageNumber > totalPages || pageNumber == currentPage)
+        {
+            return;
+        }
+
+        currentPage = pageNumber.Value;
+        ApplyPagination();
+    }
+
+    private List<PaginationItem> BuildPaginationItems()
+    {
+        var pages = new SortedSet<int> { 1, totalPages };
+
+        for (var page = currentPage - 1; page <= currentPage + 1; page++)
+        {
+            if (page >= 1 && page <= totalPages)
+            {
+                pages.Add(page);
+            }
+        }
+
+        var result = new List<PaginationItem>();
+        int? previousPage = null;
+
+        foreach (var page in pages)
+        {
+            if (previousPage.HasValue && page - previousPage.Value > 1)
+            {
+                result.Add(new PaginationItem
+                {
+                    Text = "...",
+                    IsEllipsis = true
+                });
+            }
+
+            result.Add(new PaginationItem
+            {
+                Text = page.ToString(),
+                PageNumber = page,
+                IsCurrent = page == currentPage
+            });
+
+            previousPage = page;
+        }
+
+        return result;
+    }
+
+    private List<SalesOrder> SortOrders(List<SalesOrder> orders)
+    {
+        return sortMode switch
+        {
+            SalesOrderSortMode.ProfitDesc => orders
+                .OrderByDescending(x => x.ProfitAmount)
+                .ThenByDescending(x => x.OccurredAt)
+                .ToList(),
+            SalesOrderSortMode.ProfitAsc => orders
+                .OrderBy(x => x.ProfitAmount)
+                .ThenByDescending(x => x.OccurredAt)
+                .ToList(),
+            _ => orders
+                .OrderByDescending(x => x.OccurredAt)
+                .ToList()
+        };
+    }
+
+    private void AddItem()
+    {
+        items.Add(new SalesOrderItemInput());
+    }
+
+    private void RemoveItem(SalesOrderItemInput item)
+    {
+        if (items.Count == 1)
+        {
+            return;
+        }
+
+        items.Remove(item);
+        if (ReferenceEquals(focusedItem, item))
+        {
+            focusedItem = items.FirstOrDefault();
+        }
+    }
+
+    private void OnProductChanged(SalesOrderItemInput item, string? productIdText)
+    {
+        item.ProductIdText = productIdText ?? string.Empty;
+        var product = products.FirstOrDefault(x => x.Id.ToString() == item.ProductIdText);
+        ApplySelectedProduct(item, product);
+    }
+
+    private void OnBarcodeChanged(SalesOrderItemInput item)
+    {
+        if (string.IsNullOrWhiteSpace(item.Barcode))
+        {
+            return;
+        }
+
+        var product = ProductService.GetByBarcode(item.Barcode);
+        if (product is null)
+        {
+            errorMessage = $"未找到条码为 {item.Barcode.Trim()} 的商品。";
+            return;
+        }
+
+        errorMessage = string.Empty;
+        ApplySelectedProduct(item, product);
+    }
+
+    private void SetFocusedItem(SalesOrderItemInput item)
+    {
+        focusedItem = item;
+        ScanFocusService.SetTarget($"销售单 / 条码输入框 / {ProductNameOrDefault(item)}");
+    }
+
+    private void ClearFocusedItem(SalesOrderItemInput item)
+    {
+        if (!ReferenceEquals(focusedItem, item))
+        {
+            return;
+        }
+
+        focusedItem = null;
+        ScanFocusService.ClearTarget();
+    }
+
+    private async Task HandleScannedBarcodeAsync(string barcode)
+    {
+        var targetItem = focusedItem;
+        if (targetItem is null)
+        {
+            return;
+        }
+
+        await InvokeAsync(() =>
+        {
+            targetItem.Barcode = barcode;
+            OnBarcodeChanged(targetItem);
+            StateHasChanged();
+        });
+    }
+
+    private void ApplySelectedProduct(SalesOrderItemInput item, Product? product)
+    {
+        if (product is null)
+        {
+            item.ProductId = ObjectId.Empty;
+            item.ProductIdText = string.Empty;
+            item.ProductName = string.Empty;
+            item.Barcode = string.Empty;
+            item.Unit = "件";
+            item.StockQuantity = 0m;
+            item.UnitPrice = 0m;
+            item.LineTotalAmount = 0m;
+            item.CostPrice = 0m;
+            item.PricingMode = SalesOrderPricingMode.UnitPrice;
+            return;
+        }
+
+        item.ProductId = product.Id;
+        item.ProductIdText = product.Id.ToString();
+        item.ProductName = product.Name;
+        item.Barcode = product.Barcode?.Trim() ?? string.Empty;
+        item.Unit = string.IsNullOrWhiteSpace(product.Unit) ? "件" : product.Unit;
+        item.StockQuantity = product.StockQuantity;
+        item.UnitPrice = product.SalePrice;
+        item.LineTotalAmount = item.Quantity * item.UnitPrice;
+        item.CostPrice = product.PurchasePrice;
+        item.PricingMode = SalesOrderPricingMode.UnitPrice;
+    }
+
+    private void OnPricingModeChanged(SalesOrderItemInput item, string? pricingModeText)
+    {
+        if (!Enum.TryParse<SalesOrderPricingMode>(pricingModeText, out var pricingMode))
+        {
+            pricingMode = SalesOrderPricingMode.UnitPrice;
+        }
+
+        item.PricingMode = pricingMode;
+        if (pricingMode == SalesOrderPricingMode.BulkTotal)
+        {
+            if (item.LineTotalAmount <= 0m)
+            {
+                item.LineTotalAmount = item.Quantity * item.UnitPrice;
+            }
+
+            return;
+        }
+
+        item.LineTotalAmount = item.Quantity * item.UnitPrice;
+    }
+
+    private Task SaveOrder()
+    {
+        errorMessage = string.Empty;
+
+        if (!TryParseOccurredAt(occurredAtText, out var occurredAt))
+        {
+            errorMessage = "请输入有效的销售时间。";
+            return Task.CompletedTask;
+        }
+
+        var selectedItems = items
+            .Where(x => x.ProductId != ObjectId.Empty && x.Quantity > 0)
+            .ToList();
+
+        if (selectedItems.Count == 0)
+        {
+            errorMessage = "请至少选择一行商品。";
+            return Task.CompletedTask;
+        }
+
+        var invalidBulkItem = selectedItems.FirstOrDefault(x => x.PricingMode == SalesOrderPricingMode.BulkTotal && x.LineTotalAmount <= 0m);
+        if (invalidBulkItem is not null)
+        {
+            errorMessage = $"商品“{invalidBulkItem.ProductName}”按总价计价时必须填写大于 0 的总价。";
+            return Task.CompletedTask;
+        }
+
+        var invalidUnitPriceItem = selectedItems.FirstOrDefault(x => x.PricingMode == SalesOrderPricingMode.UnitPrice && x.UnitPrice < 0m);
+        if (invalidUnitPriceItem is not null)
+        {
+            errorMessage = $"商品“{invalidUnitPriceItem.ProductName}”单价不能小于 0。";
+            return Task.CompletedTask;
+        }
+
+        var validItems = selectedItems
+            .Select(x => new SalesOrderItem
+            {
+                ProductId = x.ProductId,
+                ProductName = x.ProductName,
+                Unit = x.Unit,
+                Quantity = x.Quantity,
+                UnitPrice = x.UnitPrice,
+                PricingMode = x.PricingMode,
+                LineTotalAmount = x.PricingMode == SalesOrderPricingMode.BulkTotal
+                    ? x.LineTotalAmount
+                    : x.Quantity * x.UnitPrice,
+                CostPrice = x.CostPrice
+            })
+            .ToList();
+
+        var order = new SalesOrder
+        {
+            CustomerName = customerName,
+            Note = note,
+            Items = validItems,
+            OccurredAt = occurredAt
+        };
+
+        if (editingOrderId == ObjectId.Empty)
+        {
+            OrderService.CreateSalesOrder(order);
+        }
+        else
+        {
+            order.Id = editingOrderId;
+            OrderService.UpdateSalesOrder(order);
+        }
+
+        ResetForm();
+        LoadData();
+        return Task.CompletedTask;
+    }
+
+    private Task StartEdit(ObjectId id)
+    {
+        errorMessage = string.Empty;
+        var order = OrderService.GetSalesOrderById(id);
+        if (order is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        editingOrderId = order.Id;
+        customerName = order.CustomerName == "散客" ? string.Empty : order.CustomerName;
+        occurredAtText = FormatDateTimeLocal(order.OccurredAt);
+        note = order.Note;
+        items = order.Items.Select(item =>
+        {
+            var product = products.FirstOrDefault(x => x.Id == item.ProductId);
+            return new SalesOrderItemInput
+            {
+                ProductIdText = item.ProductId.ToString(),
+                ProductId = item.ProductId,
+                ProductName = item.ProductName,
+                Barcode = product?.Barcode?.Trim() ?? string.Empty,
+                Unit = string.IsNullOrWhiteSpace(item.Unit) ? product?.Unit ?? "件" : item.Unit,
+                StockQuantity = product?.StockQuantity ?? 0m,
+                Quantity = item.Quantity,
+                UnitPrice = item.UnitPrice,
+                PricingMode = item.PricingMode,
+                LineTotalAmount = item.LineTotalAmount > 0m ? item.LineTotalAmount : item.Quantity * item.UnitPrice,
+                CostPrice = item.CostPrice
+            };
+        }).ToList();
+
+        if (items.Count == 0)
+        {
+            AddItem();
+        }
+
+        focusedItem = null;
+        ScanFocusService.ClearTarget();
+        return Task.CompletedTask;
+    }
+
+    private Task DeleteOrder(ObjectId id)
+    {
+        errorMessage = string.Empty;
+        OrderService.DeleteSalesOrder(id);
+
+        if (editingOrderId == id)
+        {
+            ResetForm();
+        }
+
+        if (selectedOrder?.Id == id)
+        {
+            selectedOrder = null;
+        }
+
+        LoadData();
+        return Task.CompletedTask;
+    }
+
+    private Task PreviewOrder(ObjectId id)
+    {
+        selectedOrder = OrderService.GetSalesOrderById(id);
+        return Task.CompletedTask;
+    }
+
+    private async Task PrintReceipt()
+    {
+        await JSRuntime.InvokeVoidAsync("window.print");
+    }
+
+    private void ResetForm()
+    {
+        editingOrderId = ObjectId.Empty;
+        customerName = string.Empty;
+        occurredAtText = FormatDateTimeLocal(DateTimeOffset.Now);
+        note = string.Empty;
+        errorMessage = string.Empty;
+        items = [];
+        AddItem();
+        focusedItem = null;
+        ScanFocusService.ClearTarget();
+    }
+
+    private string GetFormTitle()
+    {
+        return editingOrderId == ObjectId.Empty ? "新增销售单" : "修改销售单";
+    }
+
+    private string GetSubmitButtonText()
+    {
+        return editingOrderId == ObjectId.Empty ? "保存销售单" : "保存修改";
+    }
+
+    private static string GetDerivedUnitPriceText(SalesOrderItemInput item)
+    {
+        if (item.Quantity <= 0m || item.LineTotalAmount <= 0m)
+        {
+            return "-";
+        }
+
+        return (item.LineTotalAmount / item.Quantity).ToString("0.##");
+    }
+
+    private static string GetReceiptPricingText(SalesOrderItem item)
+    {
+        return item.PricingMode == SalesOrderPricingMode.BulkTotal
+            ? $"批量总价 {item.LineTotalAmount:0.##}"
+            : $"单价 {item.UnitPrice:0.##}";
+    }
+
+    private static string GetProductOptionText(Product product)
+    {
+        return string.IsNullOrWhiteSpace(product.Barcode)
+            ? product.Name
+            : $"{product.Name} [{product.Barcode.Trim()}]";
+    }
+
+    private static string ProductNameOrDefault(SalesOrderItemInput item)
+    {
+        return string.IsNullOrWhiteSpace(item.ProductName) ? "未选商品" : item.ProductName;
+    }
+
+    private static string FormatDateTimeLocal(DateTimeOffset value)
+    {
+        return value.ToLocalTime().ToString("yyyy-MM-ddTHH:mm");
+    }
+
+    private static bool TryParseOccurredAt(string? value, out DateTimeOffset occurredAt)
+    {
+        if (DateTime.TryParse(value, out var localDateTime))
+        {
+            occurredAt = new DateTimeOffset(localDateTime, DateTimeOffset.Now.Offset);
+            return true;
+        }
+
+        occurredAt = DateTimeOffset.Now;
+        return false;
+    }
+
+    public void Dispose()
+    {
+        if (focusedItem is not null)
+        {
+            ScanFocusService.ClearTarget();
+        }
+
+        if (scanListenerId != Guid.Empty)
+        {
+            ScanBridgeService.RemoveListener(ScanSessionService.SessionId, scanListenerId);
+        }
+    }
+}

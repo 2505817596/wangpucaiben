@@ -1,0 +1,143 @@
+@page "/inventory"
+@using LiteDB
+@using wangpucaiben.Models
+@inject ProductService ProductService
+@inject InventoryService InventoryService
+
+<PageTitle>库存流水</PageTitle>
+
+<h1>库存流水</h1>
+
+<section class="form-card">
+    <h2>新增流水</h2>
+    <EditForm Model="input" OnValidSubmit="AddMovement">
+        <DataAnnotationsValidator />
+        <div class="form-grid">
+            <label>
+                <span>商品</span>
+                <select class="input" @bind="selectedProductId">
+                    <option value="">请选择商品</option>
+                    @foreach (var product in products)
+                    {
+                        <option value="@product.Id.ToString()">@product.Name</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>类型</span>
+                <select class="input" @bind="input.MovementType">
+                    @foreach (var item in Enum.GetValues<InventoryMovementType>())
+                    {
+                        <option value="@item">@GetMovementTypeText(item)</option>
+                    }
+                </select>
+            </label>
+            <label>
+                <span>数量</span>
+                <InputNumber @bind-Value="input.Quantity" class="input" />
+            </label>
+            <label>
+                <span>单价</span>
+                <InputNumber @bind-Value="input.UnitCost" class="input" />
+            </label>
+            <label class="span-2">
+                <span>备注</span>
+                <InputText @bind-Value="input.Note" class="input" />
+            </label>
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="button primary">保存流水</button>
+        </div>
+    </EditForm>
+</section>
+
+<section class="table-card">
+    <h2>最近流水</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>时间</th>
+                <th>商品</th>
+                <th>类型</th>
+                <th>数量</th>
+                <th>单价</th>
+                <th>备注</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var movement in movements)
+            {
+                <tr>
+                    <td>@movement.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                    <td>@GetProductName(movement)</td>
+                    <td>@GetMovementTypeText(movement.MovementType)</td>
+                    <td>@movement.Quantity</td>
+                    <td>@movement.UnitCost</td>
+                    <td>@movement.Note</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    private List<Product> products = [];
+    private List<InventoryMovement> movements = [];
+    private InventoryMovement input = new()
+    {
+        MovementType = InventoryMovementType.PurchaseIn
+    };
+    private string selectedProductId = string.Empty;
+
+    protected override void OnInitialized()
+    {
+        LoadData();
+    }
+
+    private void LoadData()
+    {
+        products = ProductService.GetAll();
+        movements = InventoryService.GetRecentMovements();
+    }
+
+    private string GetProductName(InventoryMovement movement)
+    {
+        if (!string.IsNullOrWhiteSpace(movement.ProductName))
+        {
+            return movement.ProductName;
+        }
+
+        return products.FirstOrDefault(x => x.Id == movement.ProductId)?.Name ?? "-";
+    }
+
+    private static string GetMovementTypeText(InventoryMovementType type)
+    {
+        return type switch
+        {
+            InventoryMovementType.PurchaseIn => "采购入库",
+            InventoryMovementType.SaleOut => "销售出库",
+            InventoryMovementType.Adjustment => "库存调整",
+            _ => type.ToString()
+        };
+    }
+
+    private Task AddMovement()
+    {
+        var product = products.FirstOrDefault(x => x.Id.ToString() == selectedProductId);
+        if (product is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        input.ProductId = product.Id;
+        input.ProductName = product.Name;
+        InventoryService.AddMovement(input);
+        LoadData();
+        input = new InventoryMovement
+        {
+            MovementType = InventoryMovementType.PurchaseIn
+        };
+        selectedProductId = string.Empty;
+        return Task.CompletedTask;
+    }
+}

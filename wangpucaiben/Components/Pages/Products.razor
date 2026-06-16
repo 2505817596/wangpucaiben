@@ -1,0 +1,222 @@
+@page "/products"
+@implements IDisposable
+@using LiteDB
+@using Microsoft.AspNetCore.Components.Web
+@using wangpucaiben.Models
+@inject ProductService ProductService
+@inject BarcodeScanBridgeService ScanBridgeService
+@inject ScanSessionService ScanSessionService
+@inject ScanFocusService ScanFocusService
+
+<PageTitle>商品管理</PageTitle>
+
+<h1>商品管理</h1>
+
+<section class="form-card">
+    <h2>@(editingProduct.Id == ObjectId.Empty ? "新增商品" : "编辑商品")</h2>
+
+    <EditForm Model="editingProduct" OnValidSubmit="SaveProduct">
+        <DataAnnotationsValidator />
+        <div class="form-grid">
+            <label>
+                <span>商品名称</span>
+                <InputText @bind-Value="editingProduct.Name" class="input" />
+            </label>
+            <label>
+                <span>条码</span>
+                <input
+                    class="input"
+                    value="@editingProduct.Barcode"
+                    @oninput="OnBarcodeInput"
+                    @onfocus="SetBarcodeFocused"
+                    @onblur="OnBarcodeBlur" />
+            </label>
+            <label>
+                <span>单位</span>
+                <InputText @bind-Value="editingProduct.Unit" class="input" />
+            </label>
+            <label>
+                <span>进价</span>
+                <InputNumber @bind-Value="editingProduct.PurchasePrice" class="input" />
+            </label>
+            <label>
+                <span>售价</span>
+                <InputNumber @bind-Value="editingProduct.SalePrice" class="input" />
+            </label>
+            <label>
+                <span>库存</span>
+                <InputNumber @bind-Value="editingProduct.StockQuantity" class="input" />
+            </label>
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="button primary">保存</button>
+            <button type="button" class="button" @onclick="ResetForm">清空</button>
+        </div>
+    </EditForm>
+</section>
+
+<section class="table-card">
+    <h2>商品列表</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>商品名称</th>
+                <th>条码</th>
+                <th>库存</th>
+                <th>进价</th>
+                <th>售价</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var product in products)
+            {
+                <tr>
+                    <td>@product.Name</td>
+                    <td>@product.Barcode</td>
+                    <td>@product.StockQuantity @product.Unit</td>
+                    <td>@product.PurchasePrice</td>
+                    <td>@product.SalePrice</td>
+                    <td>
+                        <button class="link-button" @onclick="() => EditProduct(product)">编辑</button>
+                        <button class="link-button danger" @onclick="() => DeleteProduct(product.Id)">删除</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    private List<Product> products = [];
+    private Product editingProduct = new();
+    private bool barcodeFocused;
+    private Guid scanListenerId;
+
+    protected override void OnInitialized()
+    {
+        scanListenerId = ScanBridgeService.RegisterListener(ScanSessionService.SessionId, HandleScannedBarcodeAsync);
+        LoadProducts();
+    }
+
+    private void LoadProducts()
+    {
+        products = ProductService.GetAll();
+    }
+
+    private void EditProduct(Product product)
+    {
+        editingProduct = CloneProduct(product);
+        barcodeFocused = false;
+    }
+
+    private void SetBarcodeFocused(FocusEventArgs _)
+    {
+        barcodeFocused = true;
+        ScanFocusService.SetTarget("商品管理 / 条码输入框");
+    }
+
+    private void OnBarcodeInput(ChangeEventArgs args)
+    {
+        editingProduct.Barcode = args.Value?.ToString() ?? string.Empty;
+    }
+
+    private void OnBarcodeBlur(FocusEventArgs _)
+    {
+        barcodeFocused = false;
+        ScanFocusService.ClearTarget();
+        TryLoadProductByBarcode();
+    }
+
+    private void TryLoadProductByBarcode()
+    {
+        if (string.IsNullOrWhiteSpace(editingProduct.Barcode))
+        {
+            return;
+        }
+
+        var existingProduct = ProductService.GetByBarcode(editingProduct.Barcode);
+        if (existingProduct is null)
+        {
+            return;
+        }
+
+        if (existingProduct.Id == editingProduct.Id)
+        {
+            return;
+        }
+
+        editingProduct = CloneProduct(existingProduct);
+    }
+
+    private async Task HandleScannedBarcodeAsync(string barcode)
+    {
+        await InvokeAsync(() =>
+        {
+            if (!barcodeFocused)
+            {
+                return;
+            }
+
+            editingProduct.Barcode = barcode;
+            StateHasChanged();
+        });
+    }
+
+    private void ResetForm()
+    {
+        editingProduct = new Product();
+        barcodeFocused = false;
+        ScanFocusService.ClearTarget();
+    }
+
+    private Task SaveProduct()
+    {
+        ProductService.Upsert(editingProduct);
+        LoadProducts();
+        ResetForm();
+        return Task.CompletedTask;
+    }
+
+    private Task DeleteProduct(ObjectId id)
+    {
+        ProductService.Delete(id);
+        LoadProducts();
+        if (editingProduct.Id == id)
+        {
+            ResetForm();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private static Product CloneProduct(Product product)
+    {
+        return new Product
+        {
+            Id = product.Id,
+            Name = product.Name,
+            Barcode = product.Barcode,
+            Unit = product.Unit,
+            PurchasePrice = product.PurchasePrice,
+            SalePrice = product.SalePrice,
+            StockQuantity = product.StockQuantity,
+            IsActive = product.IsActive,
+            CreatedAt = product.CreatedAt,
+            UpdatedAt = product.UpdatedAt
+        };
+    }
+
+    public void Dispose()
+    {
+        if (barcodeFocused)
+        {
+            ScanFocusService.ClearTarget();
+        }
+
+        if (scanListenerId != Guid.Empty)
+        {
+            ScanBridgeService.RemoveListener(ScanSessionService.SessionId, scanListenerId);
+        }
+    }
+}

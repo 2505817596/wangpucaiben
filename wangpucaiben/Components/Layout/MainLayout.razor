@@ -1,0 +1,66 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject ScanSessionService ScanSessionService
+@inject ScanFocusService ScanFocusService
+@inject NavigationManager NavigationManager
+
+<div class="shell">
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="brand-mark">账</div>
+            <div>
+                <div class="brand-title">杂货店记账</div>
+                <div class="brand-subtitle">Blazor Server + LiteDB</div>
+            </div>
+        </div>
+
+        <nav class="nav">
+            <a href="/" class="nav-link">总览</a>
+            <a href="/products" class="nav-link">商品管理</a>
+            <a href="/purchase-orders" class="nav-link">采购单</a>
+            <a href="/sales-orders" class="nav-link">销售单</a>
+            <a href="/inventory" class="nav-link">库存流水</a>
+            <a href="/cashflows" class="nav-link">收支记录</a>
+        </nav>
+
+        <section class="global-scan-card">
+            <div class="global-scan-head">
+                <strong>通用扫码器</strong>
+                <span class="muted-text">会话码 @ScanSessionService.SessionId</span>
+            </div>
+            <div class="muted-text">@ScanFocusService.CurrentTarget</div>
+            <div class="scan-qr-card">
+                @((MarkupString)ScanSessionService.BuildScannerQrCodeMarkup(NavigationManager.BaseUri))
+            </div>
+            <a href="@ScanSessionService.BuildScannerUrl(NavigationManager.BaseUri)" target="_blank" class="button">
+                打开手机扫码页
+            </a>
+        </section>
+    </aside>
+
+    <main class="content">
+        @Body
+    </main>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    系统发生未处理异常。 <a href="." class="reload">重新加载</a>
+    <span class="dismiss">&times;</span>
+</div>
+
+@code {
+    protected override void OnInitialized()
+    {
+        ScanFocusService.Changed += HandleScanFocusChanged;
+    }
+
+    private void HandleScanFocusChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        ScanFocusService.Changed -= HandleScanFocusChanged;
+    }
+}

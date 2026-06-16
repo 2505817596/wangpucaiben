@@ -1,0 +1,38 @@
+@page "/Error"
+@using System.Diagnostics
+
+<PageTitle>错误</PageTitle>
+
+<h1 class="text-danger">系统错误</h1>
+<h2 class="text-danger">处理请求时发生异常。</h2>
+
+@if (ShowRequestId)
+{
+    <p>
+        <strong>请求 ID：</strong> <code>@RequestId</code>
+    </p>
+}
+
+<h3>开发环境说明</h3>
+<p>
+    如果切换到 <strong>Development</strong> 环境，页面会显示更详细的错误信息。
+</p>
+<p>
+    生产环境不应开启 <strong>Development</strong>，否则可能暴露敏感异常信息。
+    本地调试时，可以设置 <strong>ASPNETCORE_ENVIRONMENT</strong> 为 <strong>Development</strong> 后重启应用。
+</p>
+
+@code{
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    [PersistentState]
+    public string? RequestId { get; set; }
+
+    private bool ShowRequestId => !string.IsNullOrEmpty(RequestId);
+
+    protected override void OnInitialized()
+    {
+        RequestId ??= Activity.Current?.Id ?? HttpContext?.TraceIdentifier;
+    }
+}
